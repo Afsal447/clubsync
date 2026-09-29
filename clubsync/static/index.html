@@ -1,0 +1,72 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClubSync</title>
+<style>
+:root{--ink:#14213d;--paper:#f7f7f2;--sig:#e0a100;--ok:#1b7f5c;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root{--ink:#e8ecf5;--paper:#10151f}}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--paper);color:var(--ink)}
+header{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding:.8rem 1rem;border-bottom:3px solid var(--sig)}
+header b{font-size:1.2rem;margin-right:auto}main{max-width:820px;margin:auto;padding:1rem}
+button,input{font:inherit;padding:.45rem .7rem;border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit}
+button{cursor:pointer;background:var(--ink);color:var(--paper);border-color:var(--ink)}button:focus-visible,input:focus-visible{outline:3px solid var(--sig)}
+.card{border:1px solid color-mix(in srgb,var(--ink) 30%,transparent);border-left:6px solid var(--sig);padding:.7rem 1rem;margin:.7rem 0;border-radius:4px}
+.tag{font-size:.85rem;padding:.1rem .5rem;border-radius:99px;border:1px solid}.approved,.true{color:var(--ok)}.rejected{color:var(--bad)}
+input{margin:.2rem 0;width:100%}textarea{width:100%;font:inherit}form.card input{display:block}h2{margin:1.2rem 0 .2rem}#msg{color:var(--bad);min-height:1.4rem}
+</style></head><body>
+<header><b>ClubSync</b><span id="who"></span><button id="out" hidden onclick="api('logout','POST').then(()=>location.reload())">Sign out</button></header>
+<main><p id="msg" role="alert"></p><div id="app"></div></main>
+<script>
+const $=s=>document.querySelector(s),app=$('#app');
+async function api(p,m='GET',b){const r=await fetch('/api/'+p,{method:m,headers:{'Content-Type':'application/json'},body:b&&JSON.stringify(b)});
+ const j=await r.json().catch(()=>({}));if(!r.ok){$('#msg').textContent=j.error||'Error';throw j}$('#msg').textContent='';return j}
+const act=(p,b,m='POST')=>api(p,m,b).then(load).catch(()=>{});
+function loginView(){app.innerHTML=`<h2>Sign in</h2><input id=e placeholder="Email" autocomplete=username><input id=p type=password placeholder="Password">
+<button onclick="api('login','POST',{email:e.value,password:p.value}).then(load)">Sign in</button>
+<h2>New student</h2><input id=sn placeholder="Full name"><input id=se placeholder="Email"><input id=sp type=password placeholder="Password">
+<input id=sr placeholder="RA Number (15 letters/digits)" maxlength=15><input id=sm placeholder="Class mentor email">
+<button onclick="api('signup','POST',{name:sn.value,email:se.value,password:sp.value,ra_number:sr.value,mentor_email:sm.value}).then(load)">Create account</button>
+<div id=g></div>`;api('config').then(c=>{if(!c.google_client_id)return;const s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';s.onload=()=>{google.accounts.id.initialize({client_id:c.google_client_id,callback:r=>api('google','POST',{id_token:r.credential}).then(load)});google.accounts.id.renderButton($('#g'),{})};document.head.appendChild(s)}).catch(()=>{})}
+const list=(a,f)=>a.length?a.map(f).join(''):'<p>Nothing here yet.</p>';
+async function load(){let u;try{u=await api('me')}catch{return loginView()}
+ $('#who').textContent=`${u.name} (${u.role}${u.ra?' · '+u.ra:''})`;$('#out').hidden=false;
+ const [ev,od,nt]=await Promise.all([api('events'),api('od'),api('notifications')]);let h='';
+ if(u.role==='student'){const rg=await api('my/registrations'),ce=await api('my/certs');
+  h+=`<h2>Open events</h2>`+list(ev.filter(e=>e.status==='approved'||e.status==='ongoing'),e=>`<div class=card><b>${e.title}</b> · ${e.club}<br>${e.date} ${e.start}-${e.end} · ${e.venue} · ${e.registered}/${e.capacity}<br>
+   Misses: ${e.periods.map(p=>p.label).join(', ')||'no class periods'}<br><button onclick="act('events/${e.id}/register')">Register</button>
+   <button onclick="const t=prompt('Token shown on organiser screen');act('events/${e.id}/checkin',{token:t})">Check in</button></div>`);
+  h+=`<h2>My registrations</h2>`+list(rg,r=>`<div class=card>${r.title} · ${r.date} · attended: <span class=${!!r.attended}>${!!r.attended}</span> <button onclick="act('od',{reg_id:${r.id}})">Apply for OD</button></div>`);
+  h+=`<h2>Certificates</h2>`+list(ce,c=>`<div class=card>${c.title} · ${c.label} · <a href="/cert/${c.code}" target=_blank>${c.code}</a></div>`)}
+ else{h+=`<h2>Events</h2>`+list(ev,e=>`<div class=card><b>${e.title}</b> <span class="tag ${e.status}">${e.status}</span> ${e.reject_reason?'· '+e.reject_reason:''}<br>${e.date} ${e.start}-${e.end} · Impact: ${e.periods.map(p=>p.label).join(', ')||'none'}<br>
+  ${['draft','rejected'].includes(e.status)?`<button onclick="act('events/${e.id}/submit')">Submit for approval</button> `:''}
+  ${e.status==='pending'&&u.role==='faculty'?`<button onclick="act('events/${e.id}/decide',{approve:true})">Approve</button> <button onclick="act('events/${e.id}/decide',{approve:false,reason:prompt('Reason?')})">Reject</button>`:''}
+  ${e.status==='approved'&&u.role!=='faculty'?`<button onclick="act('events/${e.id}/status',{to:'ongoing'})">Start</button>`:''}
+  ${e.status==='ongoing'&&u.role!=='faculty'?`<button onclick="api('events/${e.id}/qr').then(r=>alert('Token (30s): '+r.token))">Show check-in token</button> <button onclick="act('events/${e.id}/status',{to:'completed'})">Complete</button>`:''}
+  ${e.status==='completed'&&u.role!=='faculty'?`<button onclick="api('events/${e.id}/certs','POST',{label:'Participant'}).then(r=>alert(r.issued+' issued'))">Issue certificates</button>`:''}</div>`)}
+ h+=`<h2>OD requests</h2>`+list(od,o=>`<div class=card><b>${o.title}</b> · ${o.student} (${o.ra_number}) <span class="tag ${o.status}">${o.status}</span><br>Periods: ${JSON.parse(o.periods_snapshot).map(p=>p.label).join(', ')||'none'} · QR-verified attendance: <span class=${!!o.verified}>${o.verified?'yes':'not yet'}</span><br>
+  ${o.status==='pending'&&u.role==='faculty'?`<button onclick="act('od/${o.id}/decide',{approve:true})">Approve</button> <button onclick="act('od/${o.id}/decide',{approve:false,remark:prompt('Remark?')})">Reject</button>`:''}</div>`);
+ h+=`<h2>Notifications</h2>`+list(nt,n=>`<div class=card>${n.msg}<br><small>${n.at}</small></div>`);h+=await tools(u);app.innerHTML=h}
+
+const NUM=/(_id|capacity)$/;
+const FORMS={
+ user:{t:'Create account',p:'users',f:['name','email','password','role']},
+ club:{t:'Create club',p:'clubs',f:['name','description','admin_id','coordinator_id']},
+ tt:{t:'New timetable (one period per line: label,start,end,class|short_break|lunch)',p:'timetable',f:['name','days','effective_from','periods','activate'],x:b=>({...b,activate:b.activate==='yes',periods:b.periods.split('\n').filter(Boolean).map(l=>{const [label,start,end,kind]=l.split(',').map(s=>s.trim());return{label,start,end,kind}})})},
+ ev:{t:'Create event',p:'events',f:['club_id','title','description','date','start','end','venue','capacity']},
+ role:{t:'Create club role (perms: event.edit, attendance.mark, cert.issue, members.manage)',p:'clubs/{club_id}/roles',f:['club_id','name','perms'],x:b=>({name:b.name,perms:b.perms.split(',').map(s=>s.trim()).filter(Boolean)})},
+ mem:{t:'Add member by RA Number',p:'clubs/{club_id}/members',f:['club_id','ra_number','role_id'],x:b=>({ra_number:b.ra_number,role_id:b.role_id||null})},
+ bdg:{t:'Create badge',p:'clubs/{club_id}/badges',f:['club_id','name'],x:b=>({name:b.name})},
+ awd:{t:'Award badge',p:'badges/{badge_id}/award',f:['badge_id','ra_number'],x:b=>({ra_number:b.ra_number})},
+ msg:{t:'Message staff (ctx_type: general, event or od)',p:'messages',f:['to_email','ctx_type','ctx_id','body']},
+ arc:{t:'Archive club',p:'clubs/{club_id}/archive',f:['club_id'],x:()=>({})}};
+const WHO={super_admin:['user','club','tt','arc','msg'],admin:['user','club','arc','msg'],club_admin:['ev','role','mem','bdg','awd','msg'],faculty:['msg']};
+function formHtml(k){const F=FORMS[k];return `<form class=card onsubmit="return send('${k}',this)"><b>${F.t}</b>`+F.f.map(n=>n==='periods'?`<textarea name=${n} rows=4 placeholder="Period 1,08:30,09:20,class">Period 1,08:30,09:20,class\nPeriod 2,09:20,10:10,class</textarea>`:`<input name=${n} placeholder="${n}" ${n==='password'?'type=password':''}>`).join('')+'<button>Submit</button></form>'}
+function send(k,f){const F=FORMS[k];let b={};F.f.forEach(n=>{let v=f[n].value.trim();b[n]=NUM.test(n)&&/^\d+$/.test(v)?+v:(v===''?undefined:v)});
+ const path=F.p.replace(/\{(\w+)\}/g,(_,n)=>b[n]);b=F.x?F.x(b):b;act(path,b);return false}
+async function tools(u){let h='';const k=WHO[u.role]||[];
+ if(u.role==='student'){const bd=await api('my/badges');return `<h2>My badges</h2>`+list(bd,x=>`<div class=card>${x.name} · ${x.club}</div>`)}
+ const cl=await api('clubs');h+=`<h2>Clubs</h2>`+list(cl,c=>`<div class=card>#${c.id} ${c.name} · admin_id ${c.admin_id||'-'} · coordinator_id ${c.coordinator_id||'-'}</div>`);
+ if(['super_admin','admin'].includes(u.role)){const s=await api('stats'),us=await api('users');
+  h+=`<h2>Dashboard</h2>`+list(s.clubs,c=>`<div class=card><b>${c.name}</b> · members ${c.members} · events held ${c.events_held} · avg attendance ${c.avg_attendance??'-'}</div>`)+`<p>Pending approvals: ${s.pending_events.map(e=>e.title).join(', ')||'none'}</p><details><summary>User ids</summary>${us.map(x=>`<div>#${x.id} ${x.name} (${x.role}) ${x.email}</div>`).join('')}</details>`}
+ const mg=await api('messages');h+=`<h2>Messages</h2>`+list(mg,m=>`<div class=card><b>${m.sender}</b> [${m.ctx_type}${m.ctx_id?' #'+m.ctx_id:''}]: ${m.body}</div>`);
+ return h+`<h2>Actions</h2>`+k.map(formHtml).join('')}
+load();
+</script></body></html>
